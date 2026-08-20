@@ -1,0 +1,28 @@
+# 挂载配置（复制或合并到你的 profile 的 cordis.patch.yml）
+- insert:
+    # 1. Antigravity LLM 适配器插件（含 WebUI 配置卡片）
+    - id: llm-antigravity
+      name: ./plugins/dsh-llm-antigravity/lib/index.js
+      config:
+        refreshTokenEnv: ANTIGRAVITY_REFRESH_TOKEN
+
+    # 2. Antigravity 搜索后端（Google Grounding）
+    - id: web-search-antigravity
+      name: ./plugins/dsh-web-search-antigravity/lib/index.js
+      config:
+        refreshTokenEnv: ANTIGRAVITY_REFRESH_TOKEN
+
+    # 3. 搜索源选择器（含 WebUI 下拉选择卡片，可实时切换搜索后端）
+    - id: web-search-selector
+      name: ./plugins/dsh-web-search-selector/lib/index.js
+
+    # 4. Antigravity 图像生成插件（注册 generate_image 工具，基于 gemini-3.1-flash-image）
+    - id: image-gen-antigravity
+      name: ./plugins/dsh-image-gen-antigravity/lib/index.js
+      config:
+        refreshTokenEnv: ANTIGRAVITY_REFRESH_TOKEN
+
+# web_search 工具后端配置（默认 deepseek-official；安装选择器插件后可在 WebUI 实时切换）
+- id: web
+  config:
+    searchProvider: deepseek-official
