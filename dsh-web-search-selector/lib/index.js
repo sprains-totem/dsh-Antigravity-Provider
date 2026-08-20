@@ -80,11 +80,11 @@ export function ensureWebUiSearchSelectorLayout() {
           changed = true;
         }
 
-        // 5. 增强 dsh-client-modules 的 clientPath 路径解析
+        // 5. 增强 dsh-client-modules 的 clientPath 路径解析（安全精确匹配，防止子字符串误匹配）
         if (code.includes('clientPath(id) {') && !code.includes('/* UNLOCKED_CLIENT_PATH */')) {
           code = code.replace(
             'clientPath(id) {\n\t\treturn this.table.get(id)?.clientPath;',
-            'clientPath(id) { /* UNLOCKED_CLIENT_PATH */\n\t\treturn this.table.get(id)?.clientPath || this.table.get("./" + id)?.clientPath || this.table.get(id.replace(/^\\.\\//, ""))?.clientPath || [...this.table.entries()].find(([k]) => k.includes(id) || id.includes(k))?.[1]?.clientPath;'
+            'clientPath(id) { /* UNLOCKED_CLIENT_PATH */\n\t\treturn this.table.get(id)?.clientPath || this.table.get("./" + id)?.clientPath || this.table.get(id.replace(/^\\.\\//, ""))?.clientPath || this.table.get("plugins/" + id)?.clientPath || this.table.get("./plugins/" + id)?.clientPath;'
           );
           changed = true;
         }
