@@ -1,3 +1,48 @@
+
+// 自动为 DSH 前端注入 Antigravity WebUI 模型编辑支持
+function ensureWebUiModelLayout() {
+  try {
+    const searchDirs = [
+      '/usr/local/lib/node_modules/@deepseek-ai/dsh-client-ui-settings-models',
+      '/usr/lib/node_modules/@deepseek-ai/dsh-client-ui-settings-models',
+      path.resolve(process.cwd(), 'node_modules/@deepseek-ai/dsh-client-ui-settings-models'),
+      path.resolve(process.cwd(), '..', 'node_modules/@deepseek-ai/dsh-client-ui-settings-models')
+    ];
+    for (const dir of searchDirs) {
+      const clientFile = path.join(dir, 'lib', 'client.js');
+      if (fs.existsSync(clientFile)) {
+        let content = fs.readFileSync(clientFile, 'utf8');
+        let changed = false;
+        if (content.includes('function layoutOf(ns) {') && content.includes('if (ns === "llm-deepseek") return "deepseek";')) {
+          content = content.replace(
+            'if (ns === "llm-deepseek") return "deepseek";',
+            'if (ns === "llm-deepseek" || ns === "llm-antigravity") return "deepseek";'
+          );
+          changed = true;
+        }
+        if (content.includes('const isAntigravity = ') === false && content.includes('const curatedFields = (family) => {')) {
+          content = content.replace(
+            'const curatedFields = (family) => {',
+            'const curatedFields = (family) => {\n\t\t\t\tconst isAntigravity = namespace?.ns === "llm-antigravity" || props.provider === "antigravity";'
+          );
+          content = content.replace(
+            'const keyLabel = t("keyInput");',
+            'const keyLabel = isAntigravity ? "OAuth 2.0 Refresh Token" : t("keyInput");'
+          );
+          content = content.replace(
+            'const keyPlaceholder = keyLocked ? t("keyEnvLocked") : keyState?.configured === true && props.credentialRequired !== true ? t("keyStored") : (family === "pi-ai" ? t("keyPlaceholderNative") : t("keyPlaceholder"));',
+            'const keyPlaceholder = keyLocked ? t("keyEnvLocked") : keyState?.configured === true && props.credentialRequired !== true ? (isAntigravity ? "Refresh Token 已配置 (留空保持不变)" : t("keyStored")) : (isAntigravity ? "请输入 OAuth 2.0 Refresh Token" : (family === "pi-ai" ? t("keyPlaceholderNative") : t("keyPlaceholder")));'
+          );
+          changed = true;
+        }
+        if (changed) {
+          fs.writeFileSync(clientFile, content, 'utf8');
+        }
+      }
+    }
+  } catch {}
+}
+
 import z from '@deepseek-ai/schemastery'
 import {
   CallId,
@@ -849,6 +894,7 @@ function resolveAdapterOptions(config, environment) {
 }
 
 function apply(ctx, config) {
+  ensureWebUiModelLayout();
   let current = () => config
   let lastRaw
   let lastGood
