@@ -80,18 +80,38 @@ export function ensureWebUiSearchSelectorLayout() {
           changed = true;
         }
 
+        // 5. 增强 dsh-client-modules 的 clientPath 路径解析
+        if (code.includes('clientPath(id) {') && !code.includes('/* UNLOCKED_CLIENT_PATH */')) {
+          code = code.replace(
+            'clientPath(id) {\n\t\treturn this.table.get(id)?.clientPath;',
+            'clientPath(id) { /* UNLOCKED_CLIENT_PATH */\n\t\treturn this.table.get(id)?.clientPath || this.table.get("./" + id)?.clientPath || this.table.get(id.replace(/^\\.\\//, ""))?.clientPath || [...this.table.entries()].find(([k]) => k.includes(id) || id.includes(k))?.[1]?.clientPath;'
+          );
+          changed = true;
+        }
+
         if (changed) {
           fs.writeFileSync(file, code, 'utf8');
         }
       } catch {}
     }
 
+    function walkDir(dir) {
+      if (!fs.existsSync(dir)) return;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory() && entry.name !== '.git') {
+            walkDir(full);
+          } else if (entry.name.endsWith('.js') || entry.name.endsWith('.mjs')) {
+            patchFile(full);
+          }
+        }
+      } catch {}
+    }
+
     for (const dir of searchDirs) {
-      if (!fs.existsSync(dir)) continue;
-      const pluginsClient = path.join(dir, 'dsh-client-ui-settings-plugins', 'lib', 'client.js');
-      const settingsClient = path.join(dir, 'dsh-client-ui-settings', 'lib', 'client.js');
-      patchFile(pluginsClient);
-      patchFile(settingsClient);
+      if (fs.existsSync(dir)) walkDir(dir);
     }
   } catch {}
 }
