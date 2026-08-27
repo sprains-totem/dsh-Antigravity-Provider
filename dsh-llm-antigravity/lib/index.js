@@ -1001,7 +1001,13 @@ async function serializeMessages(messages, sessionId, model, attachments) {
         } else if (block.type === 'tool-call') {
           let args = block.arguments
           try { args = JSON.parse(block.arguments) } catch { /* keep raw */ }
-          const part = { functionCall: { name: block.name, args } }
+          const part = {
+            functionCall: {
+              name: block.name,
+              args,
+              ...(typeof block.id === 'string' && block.id.length > 0 ? { id: block.id } : {}),
+            },
+          }
           // [FIX #2167 / #765] functionCall must carry the session thought
           // signature (or a flash sentinel) or the upstream rejects the call and
           // the prefix cache misses. Replay the signature THIS call was created
@@ -1071,12 +1077,12 @@ async function serializeMessages(messages, sessionId, model, attachments) {
         const fr = {
           name: callNames.get(result.toolCallId) ?? 'unknown',
           response: { result: textContent || '(no output)' },
+          ...(typeof result.toolCallId === 'string' && result.toolCallId.length > 0 ? { id: result.toolCallId } : {}),
         }
         if (mediaParts.length > 0) {
           // Match the official functionResponse media shape, which also carries
           // the tool-call id: {"functionResponse":{"id":"call_...","name":...,
           // "response":{...},"parts":[{"inlineData":{...}}]}}
-          fr.id = result.toolCallId ?? ''
           fr.parts = mediaParts
         }
         parts.push({ functionResponse: fr })
