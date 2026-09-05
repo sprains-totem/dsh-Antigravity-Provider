@@ -43,14 +43,32 @@
 		const react_jsx_runtime = require("react/jsx-runtime");
 		const react = require("react");
 		const _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-		const _deepseek_ai_dsh_client_runtime_client = require("@deepseek-ai/dsh-client-runtime/client");
+		const _deepseek_ai_dsh_client_runtime_client = (() => {
+			try { return require("@deepseek-ai/dsh-client-store"); }
+			catch {
+				try { return require("@deepseek-ai/dsh-client-runtime/client"); }
+				catch {
+					return {
+						createSnapshotStore: (init) => {
+							let s = init;
+							const subs = new Set();
+							return {
+								get: () => s,
+								set: (n) => { s = n; subs.forEach((cb) => cb()); },
+								subscribe: (cb) => { subs.add(cb); return () => subs.delete(cb); }
+							};
+						}
+					};
+				}
+			}
+		})();
 
 		function WebSearchSelectorCard(props) {
 			const [open, setOpen] = react.useState(true);
 			const { t } = props;
 			const state = props.useWebSearchSelectorCard((snapshot) => snapshot);
 			const disabled = !state.writable;
-			const current = state.draftProvider ?? state.effectiveProvider ?? "deepseek-official";
+			const current = state.draftProvider ?? state.effectiveProvider ?? "antigravity";
 			const dirty = state.draftProvider !== void 0 && state.draftProvider !== state.effectiveProvider;
 
 			return (0, react_jsx_runtime.jsxs)("li", {
@@ -148,8 +166,8 @@
 										disabled,
 										onChange: (e) => props.setProvider(e.target.value),
 										children: [
-											(0, react_jsx_runtime.jsx)("option", { value: "deepseek-official", children: t("optDeepseek") }),
-											(0, react_jsx_runtime.jsx)("option", { value: "antigravity", children: t("optAntigravity") })
+											(0, react_jsx_runtime.jsx)("option", { value: "antigravity", children: t("optAntigravity") }),
+											(0, react_jsx_runtime.jsx)("option", { value: "deepseek-official", children: t("optDeepseek") })
 										]
 									}),
 									(0, react_jsx_runtime.jsx)("p", {
@@ -214,7 +232,7 @@
 
 			projection() {
 				const snapshot = this.scope.getSnapshot();
-				const effective = snapshot.value?.provider ?? "deepseek-official";
+				const effective = snapshot.value?.provider ?? "antigravity";
 				const isOverridden = snapshot.user?.provider !== void 0;
 				return {
 					writable: snapshot.writable,

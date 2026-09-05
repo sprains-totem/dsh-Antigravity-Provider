@@ -1,8 +1,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import z from '@deepseek-ai/schemastery'
-import {
-  CallId,
+import * as dshLlm from '@deepseek-ai/dsh-llm'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
+import { MAX_TIMER_DELAY_MS, idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+
+const {
   CONTEXT_WINDOW_EXCEEDED_CODE,
   EMPTY_RESPONSE_CODE,
   LlmAdapter,
@@ -15,12 +20,17 @@ import {
   isContextWindowExceededError,
   isQuotaExceededError,
   resolveRetryPolicy,
-} from '@deepseek-ai/dsh-llm'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
-import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { MAX_TIMER_DELAY_MS, idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+} = dshLlm
+const CallId = dshLlm.ToolCallId || dshLlm.CallId || ((id) => id)
+
+function deepEqualJson(a, b) {
+  if (a === b) return true
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
 
 // Antigravity (Google Cloud Code) OAuth + v1internal wire.
 // Reference: Antigravity-Manager (src-tauri/src/modules/oauth.rs, proxy/upstream/client.rs,
@@ -635,7 +645,7 @@ function isGemini3Flash(model) {
 function inputModalitiesOf(modelId) {
   const lower = modelId.toLowerCase()
   if (lower.startsWith('gemini')) return ['text', 'image', 'video', 'audio', 'document']
-  if (lower.startsWith('claude')) return ['text', 'image', 'video']
+  if (lower.startsWith('claude') || lower === 'opus' || lower === 'sonnet') return ['text', 'image', 'video']
   return ['text']
 }
 
@@ -1074,15 +1084,17 @@ async function serializeMessages(messages, sessionId, model, attachments) {
             mediaParts.push({ inlineData: { mimeType: block.mimeType || 'application/octet-stream', data: block.data } })
           }
         }
+        const toolCallId = (typeof result.toolCallId === 'string' && result.toolCallId.length > 0)
+          ? result.toolCallId
+          : (typeof result.callId === 'string' && result.callId.length > 0 ? result.callId : (typeof result.id === 'string' && result.id.length > 0 ? result.id : undefined))
         const fr = {
-          name: callNames.get(result.toolCallId) ?? 'unknown',
+          name: (toolCallId ? callNames.get(toolCallId) : undefined) ?? result.toolName ?? 'unknown',
           response: { result: textContent || '(no output)' },
-          ...(typeof result.toolCallId === 'string' && result.toolCallId.length > 0 ? { id: result.toolCallId } : {}),
+          ...(toolCallId ? { id: toolCallId } : {}),
         }
         if (mediaParts.length > 0) {
-          // Match the official functionResponse media shape, which also carries
-          // the tool-call id: {"functionResponse":{"id":"call_...","name":...,
-          // "response":{...},"parts":[{"inlineData":{...}}]}}
+          // Match the official functionResponse media shape:
+          // {"functionResponse":{"id":"call_...","name":...,"response":{...},"parts":[{"inlineData":{...}}]}}
           fr.parts = mediaParts
         }
         parts.push({ functionResponse: fr })
@@ -1173,13 +1185,20 @@ const MODEL_ALIASES = {
   'gemini-3.1-pro-high': 'gemini-pro-agent',
   'gemini-3.1-pro': 'gemini-pro-agent',
   'gemini-3-pro': 'gemini-pro-agent',
+  'claude-opus': 'claude-opus-4-6-thinking',
   'claude-opus-4-6': 'claude-opus-4-6-thinking',
   'claude-opus-4-5': 'claude-opus-4-6-thinking',
   'claude-opus-4-5-thinking': 'claude-opus-4-6-thinking',
+  'claude-3-opus': 'claude-opus-4-6-thinking',
+  'claude-3-5-opus': 'claude-opus-4-6-thinking',
+  'opus': 'claude-opus-4-6-thinking',
+  'claude-sonnet': 'claude-sonnet-4-6',
   'claude-sonnet-4-5': 'claude-sonnet-4-6',
   'claude-3-5-sonnet': 'claude-sonnet-4-6',
   'claude-3-7-sonnet': 'claude-sonnet-4-6',
   'claude-haiku-4-5': 'claude-sonnet-4-6',
+  'claude-haiku': 'claude-sonnet-4-6',
+  'sonnet': 'claude-sonnet-4-6',
 }
 
 function resolveCanonicalModel(modelId) {
@@ -1188,7 +1207,7 @@ function resolveCanonicalModel(modelId) {
 
 function maxOutputTokensLimit(model) {
   const lower = model.toLowerCase()
-  if (lower.startsWith('claude-')) return 64000
+  if (lower.startsWith('claude') || lower === 'opus' || lower === 'sonnet') return 64000
   if (lower.startsWith('gpt-oss-')) return 16384
   if (lower.includes('flash-lite') || lower.includes('flash-image')) return 16384
   if (lower.includes('pro')) return 65535
@@ -1710,7 +1729,7 @@ class AntigravityAdapter extends LlmAdapter {
 // ---------------------------------------------------------------------------
 const name = 'llm-antigravity'
 const inject = ['llm']
-const NS = settingsNamespace('llm-antigravity')
+const NS = 'llm-antigravity'
 const PROVIDER = 'antigravity'
 
 function resolveModels(models) {
@@ -1902,11 +1921,13 @@ function apply(ctx, config) {
     registration.replace([PROVIDER])
     registeredPolicy = policy
   }
-  installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source) => {
-      current = source
-    },
-    onChange: ensureRegistrationFacts,
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, NS, Config, config, {
+      setSource: (source) => {
+        current = source
+      },
+      onChange: ensureRegistrationFacts,
+    })
   })
 }
 

@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
+import { execSync } from 'node:child_process';
 
 function findNodeModulesDirs() {
   const dirs = [];
@@ -39,7 +40,18 @@ function findNodeModulesDirs() {
     }
   }
 
-  // 3. Global npm node_modules
+  // 3. Dynamic npm root -g & node binary lib
+  try {
+    const npmRoot = execSync('npm root -g', { encoding: 'utf8' }).trim();
+    if (npmRoot) dirs.push(npmRoot);
+  } catch {}
+
+  try {
+    const nodeLibNm = path.resolve(process.execPath, '..', '..', 'lib', 'node_modules');
+    dirs.push(nodeLibNm);
+  } catch {}
+
+  // 4. Global npm node_modules
   if (process.platform === 'win32') {
     if (process.env.APPDATA) dirs.push(path.join(process.env.APPDATA, 'npm', 'node_modules'));
     dirs.push('C:\\Program Files\\nodejs\\node_modules');
@@ -49,37 +61,57 @@ function findNodeModulesDirs() {
     dirs.push(path.join(homedir(), '.npm-global', 'lib', 'node_modules'));
   }
 
-  // 4. Current & parent working directories
+  // 5. Current & parent working directories
   dirs.push(path.resolve(process.cwd(), 'node_modules'));
   dirs.push(path.resolve(process.cwd(), '..', 'node_modules'));
 
-  return dirs.filter((d) => fs.existsSync(d));
+  // Normalize, deduplicate and filter existing directories
+  const uniqueDirs = Array.from(new Set(dirs.filter(Boolean).map(d => path.resolve(d))));
+  return uniqueDirs.filter((d) => fs.existsSync(d));
 }
 
 function patchFile(filePath, transforms) {
   if (!fs.existsSync(filePath)) return false;
-  let code = fs.readFileSync(filePath, 'utf8');
-  let changed = false;
+  try {
+    let code = fs.readFileSync(filePath, 'utf8');
+    let changed = false;
 
-  for (const { name, search, replace } of transforms) {
-    if (typeof search === 'string') {
-      if (code.includes(search) && !code.includes(replace)) {
-        code = code.replace(search, replace);
-        changed = true;
-        console.log(`  [+] Applied patch [${name}] to: ${filePath}`);
-      }
-    } else if (search instanceof RegExp) {
-      if (search.test(code)) {
-        code = code.replace(search, replace);
-        changed = true;
-        console.log(`  [+] Applied regex patch [${name}] to: ${filePath}`);
+    for (const { name, search, replace } of transforms) {
+      if (typeof search === 'string') {
+        if (code.includes(search) && !code.includes(replace)) {
+          code = code.replace(search, replace);
+          changed = true;
+          console.log(`  [+] Applied patch [${name}] to: ${filePath}`);
+        }
+      } else if (search instanceof RegExp) {
+        if (search.test(code)) {
+          code = code.replace(search, replace);
+          changed = true;
+          console.log(`  [+] Applied regex patch [${name}] to: ${filePath}`);
+        }
       }
     }
-  }
 
-  if (changed) {
-    fs.writeFileSync(filePath, code, 'utf8');
-    return true;
+    if (changed) {
+      try {
+        fs.writeFileSync(filePath, code, 'utf8');
+      } catch (writeErr) {
+        if (writeErr.code === 'EACCES') {
+          try {
+            fs.chmodSync(filePath, 0o666);
+            fs.writeFileSync(filePath, code, 'utf8');
+          } catch (chmodErr) {
+            console.warn(`  [!] EACCES: skipped read-only file ${filePath}`);
+            return false;
+          }
+        } else {
+          throw writeErr;
+        }
+      }
+      return true;
+    }
+  } catch (err) {
+    console.warn(`  [!] Warning while patching ${filePath}:`, err?.message || err);
   }
   return false;
 }
@@ -121,6 +153,16 @@ function walkAndPatch(rootDir) {
               search: 'isLoopback: pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname)',
               replace: 'isLoopback: true /* UNLOCKED */',
             },
+            {
+              name: 'unlock isAuthenticated',
+              search: 'isAuthenticated(request) {',
+              replace: 'isAuthenticated(request) { return true; /* UNLOCKED */',
+            },
+            {
+              name: 'unlock authorizeIndex',
+              search: 'authorizeIndex(req, res) {',
+              replace: 'authorizeIndex(req, res) { return true; /* UNLOCKED */',
+            },
           ]);
         }
 
@@ -129,8 +171,39 @@ function walkAndPatch(rootDir) {
           patchFile(fullPath, [
             {
               name: 'unlock SettingsScopeController host',
-              search: 'new SettingsScopeController(connection.api, spec, connection.isLoopback ? "host" : "remote")',
-              replace: 'new SettingsScopeController(connection.api, spec, "host" /* UNLOCKED */)',
+              search: 'connection.isLoopback ? "host" : "memory"',
+              replace: '"host" /* UNLOCKED */',
+            },
+            {
+              name: 'unlock SettingsScopeController host (v0.1.2)',
+              search: 'ctx.remote.$host.isLoopback ? "host" : "memory"',
+              replace: '"host" /* UNLOCKED */',
+            },
+            {
+              name: 'unlock SettingsScopeController host (remote fallback)',
+              search: 'connection.isLoopback ? "host" : "remote"',
+              replace: '"host" /* UNLOCKED */',
+            },
+            {
+              name: 'unlock SettingsScopeController host (remote fallback v0.1.2)',
+              search: 'ctx.remote.$host.isLoopback ? "host" : "remote"',
+              replace: '"host" /* UNLOCKED */',
+            },
+          ]);
+        }
+
+        // Patch dsh-client-ui-settings-general
+        if (fullPath.includes('dsh-client-ui-settings-general')) {
+          patchFile(fullPath, [
+            {
+              name: 'unlock documentController host',
+              search: 'connection.isLoopback ? new SettingsDocumentStore',
+              replace: 'true /* UNLOCKED */ ? new SettingsDocumentStore',
+            },
+            {
+              name: 'unlock documentController host (v0.1.2)',
+              search: 'ctx.remote.$host.isLoopback ? new SettingsDocumentStore',
+              replace: 'true /* UNLOCKED */ ? new SettingsDocumentStore',
             },
           ]);
         }
@@ -192,12 +265,23 @@ function walkAndPatch(rootDir) {
             {
               name: 'append served namespaces',
               search: 'this.served = response.result.value.namespaces.map((view) => view.ns);',
-              replace: 'this.served = response.result.value.namespaces.map((view) => view.ns); /* UNLOCKED_SERVED */ if (!this.served.includes("web-search-selector")) this.served.push("web-search-selector"); if (!this.served.includes("llm-antigravity")) this.served.push("llm-antigravity");',
+              replace: 'this.served = response.result.value.namespaces.map((view) => view.ns); /* UNLOCKED_SERVED */ ["web-search-selector", "llm-antigravity", "image-gen-antigravity", "web-search-antigravity", "fail-soft", "cloudflare-tunnel"].forEach(ns => { if (!this.served.includes(ns)) this.served.push(ns); });',
             },
             {
               name: 'unlock SettingsScopeController ready status',
               search: 'status: persistence === "host" ? "loading" : "unavailable"',
               replace: 'status: "ready" /* UNLOCKED */',
+            }
+          ]);
+        }
+
+        // Patch dsh-host-frontend-static (serve /mobile SPA route)
+        if (fullPath.includes('dsh-host-frontend-static') && fullPath.endsWith('index.js')) {
+          patchFile(fullPath, [
+            {
+              name: 'serve /mobile SPA route in frontend-static',
+              search: '		} else {\n\t\t\tbody = await readFile(target);\n\t\t\ttype = MIME[extname(target)] ?? "application/octet-stream";\n\t\t}',
+              replace: '		} else {\n\t\t\tlet readTarget = target;\n\t\t\tif (pathname === "/mobile" || pathname === "/mobile/" || pathname.startsWith("/mobile/session/")) {\n\t\t\t\treadTarget = join(distRoot, "mobile", "index.html");\n\t\t\t}\n\t\t\tbody = await readFile(readTarget);\n\t\t\ttype = MIME[extname(readTarget)] ?? "application/octet-stream";\n\t\t}',
             }
           ]);
         }

@@ -2,6 +2,10 @@
 
 > DeepSeek Harness (DSH) 的 Google Cloud Code / Antigravity 定制全套插件套件。
 
+> 📌 **分支版本说明**：
+> - **`main` 分支（当前）**：全面升级适配 **`@deepseek-ai/dsh@0.1.2-rc.1`** 及以上版本。解耦强依赖，采用 Cordis 动态 `settings` 注入与客户端 Store 三层自愈降级。
+> - **`v0.1.1-rc.2` 分支**：归档保留适配 **`@deepseek-ai/dsh@0.1.1-rc.2`** 的历史插件实现。
+
 ---
 
 ## 📦 插件清单
